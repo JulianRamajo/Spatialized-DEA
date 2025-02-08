@@ -1,0 +1,317 @@
+---
+title: "SpDEA-R-script"
+author: "Julián Ramajo"
+format: html
+editor: visual
+---
+
+## Libraries and data
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  false
+
+# Load libraries
+library(np)
+library(MASS)
+library(Benchmarking)
+library(car)
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+library(viridis)
+# Load data
+data2000 <- read.table("DATA2000.txt", header=TRUE)
+```
+
+## Variables and parameters
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  false
+
+# Variables
+attach(data2000)
+x <- cbind(x1)
+y <- cbind(q)
+Z <- cbind(z1,z2)
+# Parameters
+N <- length(x[,1])  
+s <- length(x[1,])  
+m <- length(y[1,])
+n <- length(x[,1])  
+p <- length(x[1,])  
+q <- length(y[1,])
+r <- length(Z[1,])
+ref.frontier.Y <- t(y)
+ref.frontier.X <- t(x)
+ref.frontier.Z <- t(Z)
+ref.Y <- t(y)
+ref.X <- t(x)
+ref.Z <- t(Z)
+eff.o <- matrix(nrow=n,ncol=1)
+res.o <- data.frame(eff.o)
+eff.o.c <- matrix(nrow=n,ncol=1)
+res.o.c <- data.frame(eff.o.c)
+```
+
+## Non-conditional models
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  false
+
+# ----
+# FDH
+# ----
+i<-1
+for (i in 1:n) 
+   {
+    {
+      x0 <- ref.X[,i]
+      y0 <- ref.Y[,i]
+      ref.frontier.idx.x <- apply(ref.frontier.X <= x0, 2, prod) == 1
+      ref.frontier.idx.y <- apply(ref.frontier.Y >= y0, 2, prod) == 1
+      ref.frontier.idx <- which(ref.frontier.idx.x * ref.frontier.idx.y == 1)
+      mat <- matrix(ref.frontier.Y[,ref.frontier.idx]/y0, 
+                    nrow=q, ncol=length(ref.frontier.idx))
+      effo <- max(apply(mat, 2, min))
+    }
+    res.o[i,1] <- effo
+   }
+fdho.eff <- cbind(res.o)
+fdho.score <- 1/res.o
+```
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  true
+
+# ----
+# DEA
+# ----
+deao.vrs <- dea(X=x, Y=y, RTS="vrs", ORIENTATION="out")
+dea.score <- 1/deao.vrs$eff
+summary(dea.score)
+```
+
+## Conditional models
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  false
+
+# Estimation of the bandwidths (bw)
+bw_cx <- matrix(nrow=n,ncol=r)
+bw.all <- npcdensbw(ydat=y,xdat=Z,
+                    cykertype="epanechnikov",cxkertype="epanechnikov",
+                    oxkertype="liracine",fast = TRUE, itmax = 100)
+bw_cx.all <- bw.all$xbw
+summary(bw.all)
+bw.all
+i <- 1
+for (i in 1:n)
+ {
+    flag_i <- (y >= y[i,])
+    flag <- matrix(nrow=n,ncol=1) 
+       for (j in 1:n)
+       {
+           flag[j] <- all(flag_i[j,])
+       }
+    print(i)
+    flag_x <- subset(x,subset=flag,drop=TRUE)
+    flag_y <- subset(y,subset=flag,drop=TRUE)
+    flag_Z <- subset(Z,subset=flag,drop=TRUE)
+if((length(flag_y))<=n^(2/3))                        
+    {
+     bw_cx[i,1:r] <- bw_cx.all[1:r] 
+    } else
+      {      
+      data <- data.frame(flag_Z)   
+      bw <- npcdensbw(ydat=flag_y,xdat=data,
+                      cykertype="epanechnikov",cxkertype="epanechnikov",
+                      oxkertype="liracine",bwmethod="cv.ls",fast = TRUE, 
+                      itmax = 100, tol = .1, ftol = .1)
+      bw_cx[i,1:r] <- bw$xbw
+	}
+	}
+# Correction for estimation the CDF instead of the PDF
+bw_cx_2 <- matrix(nrow=n,ncol=r) 
+bw_cx_2[ ,1:r] <- bw_cx[ ,1:r] * n^(-q/((4+q+r)*(4+r)))
+bwt <- t(bw_cx_2)
+```
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  true
+
+# ----------------
+# Conditional FDH
+# ----------------
+i<-1
+for (i in 1:n) 
+   {{
+      x0 <- ref.X[,i]
+      y0 <- ref.Y[,i]
+      z0 <- ref.Z[,i]
+      h0 <- bwt[,i]
+      ref.frontier.idx.x <- apply(ref.frontier.X <= x0, 2, prod) == 1
+      ref.frontier.idx.y <- apply(ref.frontier.Y >= y0, 2, prod) == 1
+      ref.frontier.idx.z <- apply((ref.frontier.Z-z0) <= h0, 2, prod) == 1
+      ref.frontier.idx <- which(ref.frontier.idx.x * ref.frontier.idx.y * ref.frontier.idx.z == 1)
+      mat <- matrix(ref.frontier.Y[,ref.frontier.idx]/y0, nrow=q, ncol=length(ref.frontier.idx))
+      effo.c <- max(apply(mat, 2, min))
+    }
+    res.o.c[i,1] <- effo.c
+   }
+cfdho.eff <- cbind(res.o.c)
+cfdh.score <- 1/res.o.c
+# ---------------------------
+# Reference set of variables 
+# ---------------------------
+yrefo <- matrix(nrow=n,ncol=q)
+yrefo <- cbind(y[,1]*cfdho.eff)
+# ------------------------------------------------
+# Conditional DEA -> SpDEA (spatially-conditioned)
+# ------------------------------------------------
+cdeao.vrs <- dea(X=x, Y=yrefo, XREF=x, YREF=y, RTS="vrs", ORIENTATION="out")
+cdea.score <- 1/cdeao.vrs$eff
+summary(cdea.score)
+```
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  false
+
+# -----------------------------------------------
+# Significance test of spatial external variables
+# [Nonparametric regression of R on z1 and z2]
+# -----------------------------------------------
+score.ratio <- (cdea.score)/(dea.score)
+dat <- data.frame(Z)
+bw2 <- npregbw(ydat=score.ratio, xdat=dat, bwmethod="cv.ls", regtype="ll",
+       ckertype="epanechnikov",oxkertype="liracine")
+model2 <- npreg(bws=bw2, gradients=TRUE)
+summary(model2)
+signif <- npsigtest(bws=bw2, boot.num=100)
+```
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  true
+
+# ------------------
+# Summary statistics
+# ------------------
+signif
+betas2<-model2$grad
+se2<-model2$gerr
+summary(betas2)
+summary(se2)
+colMeans(betas2)
+model2$R2
+```
+
+## Global plots
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  true
+
+# ----------
+# Densities
+# ----------
+par(family="serif")
+plot(density(dea.score),main=" ",col="blue",
+     xlab=" ",ylab=" ",ylim=c(0,4.5),las=1)
+lines(density(cdea.score),col="red")
+legend("topright",c("DEA (unconditional)","SpDEA (spatially-conditioned)"),
+       pch=c(95,95),col=c("blue","red"),bty="n", 
+       title = "Densities of DEA and SpDEA scores") 
+abline(v=mean(cdea.score),col="red",lty=2)
+abline(v=mean(dea.score),col="blue",lty=2)
+# -------------
+# Violin plots
+# -------------
+data.vp <- data.frame(
+  name=c( rep("DEA",263), rep("SpDEA",263) ),
+  value=c(dea.score, cdea.score)
+)
+sample_size = data.vp %>% group_by(name) %>% summarize(num=n())
+data.vp %>%
+  left_join(sample_size) %>%
+  mutate(myaxis = paste0(name, "\n", "n=", num)) %>%
+  ggplot( aes(x=myaxis, y=value, fill=name)) +
+  geom_violin(width=1.4) +
+  geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+  scale_fill_viridis(discrete = TRUE) +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11)
+  ) +
+  ggtitle("Violin plots of DEA and SpDEA scores") +
+  xlab("")
+```
+
+## Partial plots
+
+```{r}
+#| include: true
+#| warning: false
+#| message: false
+#| output:  true
+
+#-----------------------------------------------------------------------
+# 2D plots: Marginal effect of contextual variables on full frontier
+# [Scatterplots of R on z1 and z2]
+#-----------------------------------------------------------------------
+par(family="serif")
+scatterplot(z1,score.ratio,reg.line=FALSE,boxplots=FALSE,smoother=FALSE,ylab="R",
+            xlab="z1",grid=FALSE,bty="n",las=1)
+par(family="serif")
+scatterplot(z2,score.ratio,reg.line=FALSE,boxplots=FALSE,smoother=FALSE,ylab="R",
+            xlab="z2",grid=FALSE,bty="n",las=1)
+#-----------------------------------------------------------------------
+# 3D plot: Simultaneous impact of contextual variables on full frontier
+# [Smoothed nonparametric surface regression of R on z1 and z2]
+#-----------------------------------------------------------------------
+lr <- data.frame(score.ratio,z1,z2)
+mod.lo <- loess(score.ratio~z1+z2, span=0.71, degree=1)
+summary(mod.lo)
+time1 <- seq(min(z1), max(z1), by=3)
+V1 <- seq(min(z2), max(z2), by=5)
+pframe<- with(lr, expand.grid(z1=time1, z2=V1))
+fit.mod <- predict(mod.lo, newdata=pframe)
+nrz <- length(time1)
+ncz <- length(V1)
+z <- matrix(fit.mod,nrow=nrz)
+jet.colors <- colorRampPalette( c("blue3","green1","yellow"))
+nbcol <- 1000
+color <- jet.colors(nbcol)
+zfacet <- z[-1, -1] + z[-1, -ncz] + z[-nrz, -1] + z[-nrz, -ncz]
+facetcol <- cut(zfacet, nbcol)
+par(family="serif")
+persp(time1, V1, z, theta=670, ticktype= "detailed",  xlab= "z1",
+      ylab="z2", expand=2/3, shade=0.01,
+      col=color[facetcol], zlab= "R", 
+      main="Local impact of external variables on the production process")
+```
